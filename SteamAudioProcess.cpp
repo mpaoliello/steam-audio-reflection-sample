@@ -319,6 +319,10 @@ int SteamAudioProcess::onEnable()
 	{
 		sims.reflectionType = IPL_REFLECTIONEFFECTTYPE_HYBRID;
 	}
+	else
+	{
+		sims.reflectionType = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
+	}
 	sims.flags = IPLSimulationFlags(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_REFLECTIONS);
 	sims.maxNumOcclusionSamples = 4;
 	sims.maxNumRays = 256;
@@ -368,7 +372,7 @@ int SteamAudioProcess::onEnable()
 		iplSimulatorCommit(sim);
 	}
 
-	L.right = { 1,0,0 }; L.up = { 0,1,0 }; L.ahead = { 0,0,-1 };// L.origin = { 0.0f,1.7f,0.0f };
+	L.right = { 1,0,0 }; L.up = { 0,1,0 }; L.ahead = { 0,0,-1 }; L.origin = { 0.0f,1.7f,0.0f };
 
 	// Shared simulation inputs
 	shared.listener = L;
