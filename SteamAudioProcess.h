@@ -26,19 +26,19 @@ public:
     const int ambiOrder = 1;
     const int ambiCh = (ambiOrder + 1) * (ambiOrder + 1);
 
-    // Direct sound settings
-    IPLDirectEffectSettings des{};
-    IPLDirectEffect direct;
-    IPLBinauralEffectSettings bs{};
-    IPLBinauralEffect bin;
-    IPLReflectionEffectSettings res{};
-    IPLReflectionEffect refl;
-    IPLAmbisonicsDecodeEffectSettings ds{};
-	IPLAmbisonicsDecodeEffect decode;
-    IPLReflectionEffectSettings res2{};
-    IPLReflectionEffect refl2;
-	IPLAmbisonicsDecodeEffectSettings ds2{};
-	IPLAmbisonicsDecodeEffect decode2;
+    // Sound effect settings
+    std::vector<IPLDirectEffectSettings> des{};
+    std::vector<IPLDirectEffect> direct{};
+    std::vector<IPLBinauralEffectSettings> bs{};
+    std::vector<IPLBinauralEffect> bin{};      
+    std::vector<IPLReflectionEffectSettings> resEarly{};
+    std::vector<IPLReflectionEffect> reflEarly{};
+    std::vector<IPLAmbisonicsDecodeEffectSettings> dsEarly{};
+    std::vector<IPLAmbisonicsDecodeEffect> decodeEarly{};
+    std::vector<IPLReflectionEffectSettings> resLate{};
+    std::vector<IPLReflectionEffect> reflLate{};
+    std::vector<IPLAmbisonicsDecodeEffectSettings> dsLate{};
+    std::vector<IPLAmbisonicsDecodeEffect> decodeLate{};
 
     // Reflection sound settings
     float irDuration = 0.5f;
@@ -51,16 +51,16 @@ public:
     const float roomWidth = 10.0f;
     const float roomHeight = 3.0f;
     const float roomDepth = 10.0f;
-	IPLSceneSettings ss{};
+    IPLSceneSettings ss{};
     IPLScene scene;
-	IPLStaticMesh mesh;
+    IPLStaticMesh mesh;
 
-	// Simulation settings
+    // Simulation settings
     IPLSimulationSettings sims{};
     IPLSimulator sim;
     IPLSimulationSharedInputs shared{};
 
-	// Source settings
+    // Source settings
     int numSources;
     IPLSourceSettings* sset;
     IPLSource* sources;
@@ -69,21 +69,22 @@ public:
     std::vector<std::vector<float>> sourcesPositions;
     std::vector<float*> sourcesData;
 
-	// Listener settings
+    // Listener settings
     IPLCoordinateSpace3 L{};
     // L.right = { 1,0,0 }; L.up = { 0,1,0 }; L.ahead = { 0,0,-1 }; L.origin = { 0.0f,1.7f,0.0f };
 
     // Audio buffers
     IPLAudioBuffer inMono{}, outDirectBuffer{}, outLateReflectionBuffer{}, outEarlyReflectionBuffer{};
     IPLAudioBuffer outBinauralBuffer{}, outEarlyAmbisonicDecodeBuffer{}, outLateAmbisonicDecodeBuffer{};
-	IPLAudioBuffer outMonoReverbBuffer{};
+    IPLAudioBuffer outMonoReverbBuffer{};
+    IPLAudioBuffer directMixBuffer{}, reflectionMixBuffer{}, reverbMixBuffer{};
 
     IPLAmbisonicsDecodeEffectParams dpar{};
     IPLAmbisonicsDecodeEffectParams dpar2{};
 
-    double *directAudio, *reflectionsAudio, *reverbAudio;
+    double* directAudio, * reflectionsAudio, * reverbAudio;
 
-    SteamAudioProcess(int numSources = 1);
+    SteamAudioProcess();
     ~SteamAudioProcess();
 
     IPLSpeakerLayout speakerLayoutForNumChannels(int numChannels);
@@ -91,13 +92,15 @@ public:
     int numChannelsForOrder(int order);
     int numSamplesForDuration(float duration, int samplingRate);
     IPLStaticMesh create_static_scene(float W, float H, float D, IPLScene scene, IPLStaticMesh* mesh);
-	float compressSample(float sample, float threshold,float ratio);
-    void mixWithCompression(IPLAudioBuffer* input,  IPLAudioBuffer* output,
-		float threshold, float ratio);
+    float compressSample(float sample, float threshold, float ratio);
+    void mixWithCompression(IPLAudioBuffer* input, IPLAudioBuffer* output, bool normalize, bool compress,
+        float threshold, float ratio);
+    void clearAudioBuffer(IPLAudioBuffer* buffer);
+    void copyAudioBuffer(IPLAudioBuffer* dest, const IPLAudioBuffer* src);
 
     void awake();
     int onEnable();
-	void update();
+    void update();
     int onDisable();
-	void onDestroy();
+    void onDestroy();
 };

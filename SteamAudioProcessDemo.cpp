@@ -68,11 +68,14 @@ int main()
 
 
 	SteamAudioProcess sap = SteamAudioProcess();
+	sap.numSources = 1;
 	float* sourceBuffer = (float*)calloc(sap.frameSize, sizeof(float));
 	sap.sourcesData.push_back(sourceBuffer);
 	sap.sourcesPositions.push_back(std::vector<float>{ 0.0f, 1.7f, -3.0f });
 
-	std::string filename = "jazz2";
+	std::string filename = "jazz";
+	//std::string filename = "LinkinPark_InTheEnd";
+	
 	if (!load_wav_mono_f32((std::string(output_dir) + "\\" + filename + ".wav").c_str(), &mono, &total, &sampleRate)) { fprintf(stderr, "Expected mono 32-bit float WAV.\n"); return 1; }
 
 	const int framesTotal = (total + sap.frameSize - 1) / sap.frameSize;
@@ -97,7 +100,7 @@ int main()
 
 		sap.update();
 
-		//std::this_thread::sleep_for(std::chrono::milliseconds(16));
+		//std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
 		// accumulate
 		for (int i = 0;i < sap.frameSize;++i) {

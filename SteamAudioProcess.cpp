@@ -1,9 +1,8 @@
 #include "SteamAudioProcess.h"
 #include <iostream>
 
-SteamAudioProcess::SteamAudioProcess(int numSources)
+SteamAudioProcess::SteamAudioProcess()
 {
-	this->numSources = numSources;
 	wood.absorption[0] = 0.11f;
 	wood.absorption[1] = 0.07f;
 	wood.absorption[2] = 0.06f;
@@ -112,12 +111,25 @@ float SteamAudioProcess::compressSample(float sample, float threshold, float rat
 //float ratio = 4.0f;     // 4:1 compression
 
 void SteamAudioProcess::mixWithCompression(IPLAudioBuffer* input, IPLAudioBuffer* output,
-	float threshold, float ratio) {
+	bool normalize,
+	bool compress, float threshold, float ratio) {
 	// Step 1: Mix sources
 	iplAudioBufferMix(ctx, input, output);
 
 	int numSamples = output->numSamples;
 	int numChannels = output->numChannels;
+
+	if (normalize == false)
+	{
+		// Just clamp values to [-1.0, 1.0]
+		for (int channelIdx = 0; channelIdx < numChannels; channelIdx++)
+		{
+			for (int sampleIdx = 0; sampleIdx < numSamples; sampleIdx++) {
+				output->data[channelIdx][sampleIdx] = fmaxf(fminf(output->data[channelIdx][sampleIdx], 1.0f), -1.0f);
+			}
+		}
+		return; // No normalization requested
+	}
 
 	// Step 2: Peak limiting (prevent hard clipping)
 	float maxVal = 0.0f;
@@ -139,6 +151,10 @@ void SteamAudioProcess::mixWithCompression(IPLAudioBuffer* input, IPLAudioBuffer
 		}
 	}
 
+	if (compress == false) {
+		return; // No compression requested
+	}
+
 	// Step 3: Apply compression for smoother dynamics
 	for (int channelIdx = 0; channelIdx < numChannels; channelIdx++)
 	{
@@ -149,6 +165,24 @@ void SteamAudioProcess::mixWithCompression(IPLAudioBuffer* input, IPLAudioBuffer
 	}
 }
 
+void SteamAudioProcess::clearAudioBuffer(IPLAudioBuffer* buffer)
+{
+	// Iterate over each channel
+	for (int i = 0; i < buffer->numChannels; ++i)
+	{
+		// Zero out the block of samples for the current channel
+		memset(buffer->data[i], 0, buffer->numSamples * sizeof(IPLfloat32));
+	}
+}
+
+void SteamAudioProcess::copyAudioBuffer(IPLAudioBuffer* dest, const IPLAudioBuffer* src) {
+	// Iterate over each channel
+	for (int i = 0; i < src->numChannels; ++i)
+	{
+		// Copy the block of samples for the current channel
+		memcpy(dest->data[i], src->data[i], src->numSamples * sizeof(IPLfloat32));
+	}
+}
 
 void SteamAudioProcess::awake()
 {
@@ -182,75 +216,92 @@ int SteamAudioProcess::onEnable()
 		return 1;
 	}
 
-	// Create effects
-	des.numChannels = 1;
-	if (iplDirectEffectCreate(ctx, &as, &des, &direct) != IPL_STATUS_SUCCESS)
+	for (int s = 0; s < numSources; s++)
 	{
-		std::puts("iplDirectEffectCreate failed");
-		return 1;
-	}
+        // Add one element to each vector so index 's' is valid
+        des.push_back(IPLDirectEffectSettings{});                 // direct effect settings
+        direct.push_back(IPLDirectEffect{});                      // direct effect handle
+        bs.push_back(IPLBinauralEffectSettings{});                // binaural settings
+        bin.push_back(IPLBinauralEffect{});                       // binaural effect handle
+        resEarly.push_back(IPLReflectionEffectSettings{});        // early reflection settings
+        reflEarly.push_back(IPLReflectionEffect{});               // early reflection effect handle
+        dsEarly.push_back(IPLAmbisonicsDecodeEffectSettings{});  // early ambisonics decode settings
+        decodeEarly.push_back(IPLAmbisonicsDecodeEffect{});      // early ambisonics decode effect handle
+        resLate.push_back(IPLReflectionEffectSettings{});         // late reflection settings
+        reflLate.push_back(IPLReflectionEffect{});                // late reflection effect handle
+        dsLate.push_back(IPLAmbisonicsDecodeEffectSettings{});   // late ambisonics decode settings
+        decodeLate.push_back(IPLAmbisonicsDecodeEffect{});       // late ambisonics decode effect handle
 
-	bs.hrtf = hrtf;
-	if (iplBinauralEffectCreate(ctx, &as, &bs, &bin) != IPL_STATUS_SUCCESS)
-	{
-		std::puts("iplBinauralEffectCreate failed");
-		return 1;
-	}
+		// Create effects
+		des[s].numChannels = 1;
+		if (iplDirectEffectCreate(ctx, &as, &des[s], &direct[s]) != IPL_STATUS_SUCCESS)
+		{
+			std::puts("iplDirectEffectCreate failed");
+			return 1;
+		}
 
-	if (useHybridReverb)
-	{
-		res.type = IPL_REFLECTIONEFFECTTYPE_HYBRID;
-	}
-	else
-	{
-		res.type = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
-	}
-	res.irSize = numSamplesForDuration(irDuration, samplingRate);
-	std::cout << "[ReflectionEffectSettings] irSize = " << res.irSize << std::endl;
-	res.numChannels = ambiCh;
-	if (iplReflectionEffectCreate(ctx, &as, &res, &refl) != IPL_STATUS_SUCCESS)
-	{
-		std::puts("iplReflectionEffectCreate failed");
-		return 1;
-	}
+		bs[s].hrtf = hrtf;
+		if (iplBinauralEffectCreate(ctx, &as, &bs[s], &bin[s]) != IPL_STATUS_SUCCESS)
+		{
+			std::puts("iplBinauralEffectCreate failed");
+			return 1;
+		}
 
-	ds.maxOrder = ambiOrder;
-	ds.hrtf = hrtf;
-	IPLSpeakerLayout layout{};
-	layout.type = IPL_SPEAKERLAYOUTTYPE_STEREO; // target stereo (+ binaural switch)
-	ds.speakerLayout = layout;
-	if (iplAmbisonicsDecodeEffectCreate(ctx, &as, &ds, &decode) != IPL_STATUS_SUCCESS)
-	{
-		std::puts("iplAmbisonicsDecodeEffectCreate failed");
-		return 1;
-	}
+		if (useHybridReverb)
+		{
+			resEarly[s].type = IPL_REFLECTIONEFFECTTYPE_HYBRID;
+		}
+		else
+		{
+			resEarly[s].type = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
+		}
+		resEarly[s].irSize = numSamplesForDuration(irDuration, samplingRate);
+		std::cout << "[ReflectionEffectSettings] irSize = " << resEarly[s].irSize << std::endl;
+		resEarly[s].numChannels = ambiCh;
+		if (iplReflectionEffectCreate(ctx, &as, &resEarly[s], &reflEarly[s]) != IPL_STATUS_SUCCESS)
+		{
+			std::puts("iplReflectionEffectCreate failed");
+			return 1;
+		}
 
-	if (useHybridReverb)
-	{
-		res2.type = IPL_REFLECTIONEFFECTTYPE_HYBRID;
-	}
-	else
-	{
-		res2.type = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
-	}
-	res2.irSize = numSamplesForDuration(irDuration, samplingRate);
-	std::cout << "[ReflectionEffectSettings] irSize = " << res2.irSize << std::endl;
-	res2.numChannels = ambiCh;
-	if (iplReflectionEffectCreate(ctx, &as, &res2, &refl2) != IPL_STATUS_SUCCESS)
-	{
-		std::puts("iplReflectionEffectCreate failed");
-		return 1;
-	}
+		dsEarly[s].maxOrder = ambiOrder;
+		dsEarly[s].hrtf = hrtf;
+		IPLSpeakerLayout layout{};
+		layout.type = IPL_SPEAKERLAYOUTTYPE_STEREO; // target stereo (+ binaural switch)
+		dsEarly[s].speakerLayout = layout;
+		if (iplAmbisonicsDecodeEffectCreate(ctx, &as, &dsEarly[s], &decodeEarly[s]) != IPL_STATUS_SUCCESS)
+		{
+			std::puts("iplAmbisonicsDecodeEffectCreate failed");
+			return 1;
+		}
 
-	ds2.maxOrder = ambiOrder;
-	ds2.hrtf = hrtf;
-	IPLSpeakerLayout layout2{};
-	layout2.type = IPL_SPEAKERLAYOUTTYPE_STEREO; // target stereo (+ binaural switch)
-	ds2.speakerLayout = layout2;
-	if (iplAmbisonicsDecodeEffectCreate(ctx, &as, &ds2, &decode2) != IPL_STATUS_SUCCESS)
-	{
-		std::puts("iplAmbisonicsDecodeEffectCreate failed");
-		return 1;
+		if (useHybridReverb)
+		{
+			resLate[s].type = IPL_REFLECTIONEFFECTTYPE_HYBRID;
+		}
+		else
+		{
+			resLate[s].type = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
+		}
+		resLate[s].irSize = numSamplesForDuration(irDuration, samplingRate);
+		std::cout << "[ReflectionEffectSettings] irSize = " << resLate[s].irSize << std::endl;
+		resLate[s].numChannels = ambiCh;
+		if (iplReflectionEffectCreate(ctx, &as, &resLate[s], &reflLate[s]) != IPL_STATUS_SUCCESS)
+		{
+			std::puts("iplReflectionEffectCreate failed");
+			return 1;
+		}
+
+		dsLate[s].maxOrder = ambiOrder;
+		dsLate[s].hrtf = hrtf;
+		IPLSpeakerLayout layout2{};
+		layout2.type = IPL_SPEAKERLAYOUTTYPE_STEREO; // target stereo (+ binaural switch)
+		dsLate[s].speakerLayout = layout2;
+		if (iplAmbisonicsDecodeEffectCreate(ctx, &as, &dsLate[s], &decodeLate[s]) != IPL_STATUS_SUCCESS)
+		{
+			std::puts("iplAmbisonicsDecodeEffectCreate failed");
+			return 1;
+		}
 	}
 
 	// Create scene
@@ -317,7 +368,7 @@ int SteamAudioProcess::onEnable()
 		iplSimulatorCommit(sim);
 	}
 
-	L.right = { 1,0,0 }; L.up = { 0,1,0 }; L.ahead = { 0,0,-1 }; L.origin = { 0.0f,1.7f,0.0f };
+	L.right = { 1,0,0 }; L.up = { 0,1,0 }; L.ahead = { 0,0,-1 };// L.origin = { 0.0f,1.7f,0.0f };
 
 	// Shared simulation inputs
 	shared.listener = L;
@@ -336,6 +387,9 @@ int SteamAudioProcess::onEnable()
 	iplAudioBufferAllocate(ctx, 2, frameSize, &outEarlyAmbisonicDecodeBuffer);
 	iplAudioBufferAllocate(ctx, 2, frameSize, &outLateAmbisonicDecodeBuffer);
 	iplAudioBufferAllocate(ctx, 1, frameSize, &outMonoReverbBuffer);
+	iplAudioBufferAllocate(ctx, 2, frameSize, &directMixBuffer);
+	iplAudioBufferAllocate(ctx, 2, frameSize, &reflectionMixBuffer);
+	iplAudioBufferAllocate(ctx, 1, frameSize, &reverbMixBuffer);
 
 	dpar.order = ambiOrder; dpar.hrtf = hrtf; dpar.orientation = L; dpar.binaural = IPL_TRUE;
 	dpar2.order = ambiOrder; dpar2.hrtf = hrtf; dpar2.orientation = L; dpar2.binaural = IPL_TRUE;
@@ -353,10 +407,6 @@ int SteamAudioProcess::onEnable()
 
 void SteamAudioProcess::update()
 {
-	// Fill input mono buffer from source data
-	for (int i = 0;i < frameSize;++i)
-		// TODO: Is it ok or use memcpy?
-		inMono.data[0][i] = sourcesData[0][i];
 
 	std::vector<IPLSimulationInputs> inpsList;
 
@@ -432,10 +482,15 @@ void SteamAudioProcess::update()
 
 	// Get simulation outputs for each source
 	IPLSimulationOutputs so{};
-	for (int i = 0; i < numSources; i++)
+	for (int s = 0; s < numSources; s++)
 	{
-		IPLSource src = sources[i];
-		IPLSimulationInputs inps = inpsList[i];
+		// Fill input mono buffer from source data
+		for (int frameIdx = 0;frameIdx < frameSize;++frameIdx)
+			// TODO: Is it ok or use memcpy?
+			inMono.data[0][frameIdx] = sourcesData[s][frameIdx];
+
+		IPLSource src = sources[s];
+		IPLSimulationInputs inps = inpsList[s];
 		IPLVector3 dir = { inps.source.origin.x - L.origin.x, inps.source.origin.y - L.origin.y, inps.source.origin.z - L.origin.z };
 		iplSourceGetOutputs(src, inps.flags, &so);
 
@@ -475,14 +530,14 @@ void SteamAudioProcess::update()
 		//dp.directivity = 1.0f; // omnidirectional
 		dp.directivity = so.direct.directivity;
 
-		iplDirectEffectApply(direct, &dp, &inMono, &outDirectBuffer);
+		iplDirectEffectApply(direct[s], &dp, &inMono, &outDirectBuffer);
 
 		IPLBinauralEffectParams bp{};
 		bp.hrtf = hrtf;
 		bp.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
 		bp.spatialBlend = 1.0f;
 		bp.direction = dir;
-		iplBinauralEffectApply(bin, &bp, &outDirectBuffer, &outBinauralBuffer);
+		iplBinauralEffectApply(bin[s], &bp, &outDirectBuffer, &outBinauralBuffer);
 
 
 		// REFLECTIONS
@@ -491,29 +546,27 @@ void SteamAudioProcess::update()
 
 		// (A) EARLY-ONLY:
 		{
-			IPLReflectionEffectParams rpEalry{};
+			IPLReflectionEffectParams rpEarly{};
 			if (useHybridReverb)
 			{
-				rpEalry.type = IPL_REFLECTIONEFFECTTYPE_HYBRID;
-				rpEalry.reverbTimes[0] = rpEalry.reverbTimes[1] = rpEalry.reverbTimes[2] = 0.0f;
-				rpEalry.delay = so.reflections.delay;
+				rpEarly.type = IPL_REFLECTIONEFFECTTYPE_HYBRID;
+				rpEarly.reverbTimes[0] = rpEarly.reverbTimes[1] = rpEarly.reverbTimes[2] = 0.0f;
+				rpEarly.delay = so.reflections.delay;
 			}
 			else
 			{
-				rpEalry.type = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
+				rpEarly.type = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
 			}
-			rpEalry.ir = so.reflections.ir;
-			rpEalry.numChannels = so.reflections.numChannels;
+			rpEarly.ir = so.reflections.ir;
+			rpEarly.numChannels = so.reflections.numChannels;
 			// no late tail
 			// use only early IR
-			rpEalry.irSize = irEarly;
+			rpEarly.irSize = irEarly;
 			// Apply to mono input -> Ambisonics buffer
-			iplReflectionEffectApply(refl, &rpEalry, &inMono, &outEarlyReflectionBuffer, nullptr);
+			iplReflectionEffectApply(reflEarly[s], &rpEarly, &inMono, &outEarlyReflectionBuffer, nullptr);
 			// Ambisonics decode -> stereo binaural
-			iplAmbisonicsDecodeEffectApply(decode, &dpar, &outEarlyReflectionBuffer, &outEarlyAmbisonicDecodeBuffer);
+			iplAmbisonicsDecodeEffectApply(decodeEarly[s], &dpar, &outEarlyReflectionBuffer, &outEarlyAmbisonicDecodeBuffer);
 		}
-
-		int pluto = 0;
 
 		// (B) LATE-ONLY:
 		{
@@ -537,26 +590,41 @@ void SteamAudioProcess::update()
 			rpLate.reverbTimes[1] = rt60[1];
 			rpLate.reverbTimes[2] = rt60[2];
 			// Apply to mono input -> Ambisonics buffer
-			iplReflectionEffectApply(refl2, &rpLate, &inMono, &outLateReflectionBuffer, nullptr);
+			iplReflectionEffectApply(reflLate[s], &rpLate, &inMono, &outLateReflectionBuffer, nullptr);
 			// Ambisonics decode -> stereo binaural
-			iplAmbisonicsDecodeEffectApply(decode2, &dpar2, &outLateReflectionBuffer, &outLateAmbisonicDecodeBuffer);
+			iplAmbisonicsDecodeEffectApply(decodeLate[s], &dpar2, &outLateReflectionBuffer, &outLateAmbisonicDecodeBuffer);
 			iplAudioBufferDownmix(ctx, &outLateAmbisonicDecodeBuffer, &outMonoReverbBuffer);
 		}
 
+		// Mix with compression into final buffers
+		if (s == 0)
+		{
+			copyAudioBuffer(&directMixBuffer, &outBinauralBuffer);
+			copyAudioBuffer(&reflectionMixBuffer, &outEarlyAmbisonicDecodeBuffer);
+			copyAudioBuffer(&reverbMixBuffer, &outMonoReverbBuffer);
+		}
+		else
+		{
+			mixWithCompression(&outBinauralBuffer, &directMixBuffer, false, false, 0.8f, 4.0f);
+			mixWithCompression(&outEarlyAmbisonicDecodeBuffer, &reflectionMixBuffer, false, false, 0.8f, 4.0f);
+			mixWithCompression(&outMonoReverbBuffer, &reverbMixBuffer, false, false, 0.8f, 4.0f);
+		}
 	}
 
 	// For loop instead of memcpy due to different data types (float vs double)
-	float* srcDirect = outBinauralBuffer.data[0];
-	float* srcReflections = outEarlyAmbisonicDecodeBuffer.data[0];
-	float* srcReverb = outLateAmbisonicDecodeBuffer.data[0];
-	for (int i = 0; i < frameSize * 2; ++i)
+	float** srcDirect = directMixBuffer.data;
+	float** srcReflections = reflectionMixBuffer.data;
+	float** srcReverb = reverbMixBuffer.data;
+	for (int channelIdx = 0; channelIdx < 2; channelIdx++)
 	{
-		directAudio[i] = static_cast<double>(srcDirect[i]);
-		reflectionsAudio[i] = static_cast<double>(srcReflections[i]);
-		if (i < frameSize)
-			reverbAudio[i] = static_cast<double>(outLateAmbisonicDecodeBuffer.data[0][i]);
+		for (int sampleIdx = 0; sampleIdx < frameSize; sampleIdx++)
+		{
+			directAudio[sampleIdx + channelIdx * frameSize] = static_cast<double>(srcDirect[channelIdx][sampleIdx]);
+			reflectionsAudio[sampleIdx + channelIdx * frameSize] = static_cast<double>(srcReflections[channelIdx][sampleIdx]);
+			if (channelIdx < 1)
+				reverbAudio[sampleIdx + channelIdx * frameSize] = static_cast<double>(srcReverb[channelIdx][sampleIdx]);
+		}
 	}
-
 }
 
 int SteamAudioProcess::onDisable()
@@ -570,18 +638,35 @@ int SteamAudioProcess::onDisable()
 	iplAudioBufferFree(ctx, &outEarlyAmbisonicDecodeBuffer);
 	iplAudioBufferFree(ctx, &outLateAmbisonicDecodeBuffer);
 	iplAudioBufferFree(ctx, &outMonoReverbBuffer);
-	iplReflectionEffectRelease(&refl);
-	iplReflectionEffectRelease(&refl2);
-	iplDirectEffectRelease(&direct);
-	iplAmbisonicsDecodeEffectRelease(&decode);
-	iplAmbisonicsDecodeEffectRelease(&decode2);
-	iplBinauralEffectRelease(&bin);
+	iplAudioBufferFree(ctx, &directMixBuffer);
+	iplAudioBufferFree(ctx, &reflectionMixBuffer);
+	iplAudioBufferFree(ctx, &reverbMixBuffer);
 	for (int i = 0; i < numSources; i++)
 	{
+		iplReflectionEffectRelease(&reflEarly[i]);
+		iplReflectionEffectRelease(&reflLate[i]);
+		iplDirectEffectRelease(&direct[i]);
+		iplAmbisonicsDecodeEffectRelease(&decodeEarly[i]);
+		iplAmbisonicsDecodeEffectRelease(&decodeLate[i]);
+		iplBinauralEffectRelease(&bin[i]);
 		IPLSource src = sources[i];
 		iplSourceRemove(src, sim);
 		iplSourceRelease(&src);
 	}
+
+	des.clear();
+	direct.clear();
+	bs.clear();
+	bin.clear();
+	resEarly.clear();
+	reflEarly.clear();
+	dsEarly.clear();
+	decodeEarly.clear();
+	resLate.clear();
+	reflLate.clear();
+	dsLate.clear();
+	decodeLate.clear();
+
 	iplStaticMeshRemove(mesh, scene);
 	iplStaticMeshRelease(&mesh);
 	iplSceneRelease(&scene);
