@@ -734,7 +734,7 @@ int main1()
 }
 
 
-int main()
+int main2()
 {
 	const char* output_dir = ".\\media";
 
