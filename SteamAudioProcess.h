@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <string>
 #include <vector>
@@ -8,7 +8,12 @@
 class SteamAudioProcess
 {
 public:
+    const float EARLY_GAIN = 0.5f;   // -6 dB
+    //Early reflections should be loud enough to convey space, but never compete with direct sound in energy.
+    const float LATE_GAIN = 0.35f;  //  −9 dB
+
     IPLMaterial wood{};
+    IPLMaterial gravel{}; // ghiaia
     IPLMaterial* materials; // Change to a pointer to allow dynamic allocation
 
     IPLContext ctx;
@@ -40,10 +45,17 @@ public:
     std::vector<IPLAmbisonicsDecodeEffectSettings> dsLate{};
     std::vector<IPLAmbisonicsDecodeEffect> decodeLate{};
 
+    std::vector<IPLSimulationInputs> inpsList;
+
+    // Gains
+    float directGain = 1.0f;
+    float earlyReflectionsGain = EARLY_GAIN;
+    float reverbGain = LATE_GAIN;
+
     // Reflection sound settings
-    float irDuration = 0.5f;
+    float irDuration = 1.0f;
     const bool useHybridReverb = false;
-    const float earlySeconds = 0.1f;
+    const float earlySeconds = 0.05f;
     int irTotal;
     int irEarly;
 
@@ -97,6 +109,7 @@ public:
         float threshold, float ratio);
     void clearAudioBuffer(IPLAudioBuffer* buffer);
     void copyAudioBuffer(IPLAudioBuffer* dest, const IPLAudioBuffer* src);
+    void applyGainToBuffer(IPLAudioBuffer* buffer, int numSamples, float volume);
 
     void awake();
     int onEnable();

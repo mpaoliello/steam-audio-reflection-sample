@@ -103,7 +103,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>.\dependencies\steam-audio\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\dependencies\steam-audio\include;.\dependencies\nlohmann</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -121,7 +121,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>.\dependencies\steam-audio\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\dependencies\steam-audio\include;.\dependencies\nlohmann</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -131,11 +131,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Placements.cpp" />
     <ClCompile Include="SteamAudioProcess.cpp" />
     <ClCompile Include="SteamAudioProcessDemo.cpp" />
     <ClCompile Include="SteamAudioReflectionSample.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Placements.h" />
     <ClInclude Include="SteamAudioProcess.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

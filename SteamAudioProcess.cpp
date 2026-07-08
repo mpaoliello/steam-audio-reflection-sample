@@ -10,8 +10,18 @@ SteamAudioProcess::SteamAudioProcess()
 	wood.transmission[0] = 0.07f;
 	wood.transmission[1] = 0.014f;
 	wood.transmission[2] = 0.005f;
-	materials = new IPLMaterial[1];
+
+	gravel.absorption[0] = 0.6f;
+	gravel.absorption[1] = 0.7f;
+	gravel.absorption[2] = 0.8f;
+	gravel.scattering = 0.05f;
+	gravel.transmission[0] = 0.031f;
+	gravel.transmission[1] = 0.012f;
+	gravel.transmission[2] = 0.008f;
+
+	materials = new IPLMaterial[2];
 	materials[0] = wood;
+	materials[1] = gravel;
 }
 
 SteamAudioProcess::~SteamAudioProcess()
@@ -70,14 +80,16 @@ IPLStaticMesh SteamAudioProcess::create_static_scene(float W, float H, float D, 
 	};
 	// 12 triangles (floor, ceiling, 4 walls)
 	IPLTriangle t[12] = {
-		{0,1,2},{0,2,3},         // floor
-		{4,7,6},{4,6,5},         // ceiling
-		{0,4,5},{0,5,1},         // -Z wall
-		{1,5,6},{1,6,2},         // +X wall
-		{2,6,7},{2,7,3},         // +Z wall
-		{3,7,4},{3,4,0}          // -X wall
+		{0,2,1},{0,3,2},         // floor
+		{4,6,7},{4,5,6},         // ceiling
+		{0,5,4},{0,1,5},         // -Z wall
+		{1,6,5},{1,2,6},         // +X wall
+		{2,7,6},{2,3,7},         // +Z wall
+		{3,4,7},{3,0,4}          // -X wall
 	};
-	IPLint32 matIdx[12]; for (int i = 0;i < 12;++i) matIdx[i] = 0;
+	IPLint32 matIdx[12];
+	for (int i = 0;i < 12;++i)
+		matIdx[i] = 1; // 0 = wood, 1 = gravel
 
 	IPLStaticMeshSettings mset{};
 	mset.numVertices = 8; mset.numTriangles = 12; mset.numMaterials = 1;
@@ -181,6 +193,30 @@ void SteamAudioProcess::copyAudioBuffer(IPLAudioBuffer* dest, const IPLAudioBuff
 	{
 		// Copy the block of samples for the current channel
 		memcpy(dest->data[i], src->data[i], src->numSamples * sizeof(IPLfloat32));
+	}
+}
+
+void SteamAudioProcess::applyGainToBuffer(IPLAudioBuffer* buffer, int numSamples, float volume)
+{
+	const float MAX_VALUE = 1.0f;
+	const float MIN_VALUE = -1.0f;
+
+	if (volume < 0.0f) volume = 0.0f; // Clamp to prevent negative volume
+
+	for (int channelIdx = 0; channelIdx < buffer->numChannels; channelIdx++)
+	{
+		for (int sampleIdx = 0; sampleIdx < numSamples; sampleIdx++)
+		{
+			float new_sample = buffer->data[channelIdx][sampleIdx] * volume;
+			// 1. Clamp the resulting value to prevent clipping
+			if (new_sample > MAX_VALUE) {
+				new_sample = MAX_VALUE;
+			}
+			else if (new_sample < MIN_VALUE) {
+				new_sample = MIN_VALUE;
+			}
+			buffer->data[channelIdx][sampleIdx] = new_sample;
+		}
 	}
 }
 
@@ -329,7 +365,7 @@ int SteamAudioProcess::onEnable()
 	sims.numDiffuseSamples = 128;
 	sims.maxDuration = irDuration;
 	sims.maxOrder = ambiOrder;
-	sims.maxNumSources = 8;
+	sims.maxNumSources = 32;
 	sims.numThreads = 2;
 	sims.rayBatchSize = 16;
 	sims.numVisSamples = 4;
@@ -381,6 +417,8 @@ int SteamAudioProcess::onEnable()
 	shared.duration = irDuration;
 	shared.order = ambiOrder;
 	shared.irradianceMinDistance = 1.0f;
+	shared.pathingUserData = nullptr;
+	shared.pathingVisCallback = nullptr;
 
 	// Buffer allocations
 	iplAudioBufferAllocate(ctx, 1, frameSize, &inMono);
@@ -411,6 +449,7 @@ int SteamAudioProcess::onEnable()
 
 void SteamAudioProcess::update()
 {
+	if (numSources <= 0) return;
 
 	std::vector<IPLSimulationInputs> inpsList;
 
@@ -447,8 +486,8 @@ void SteamAudioProcess::update()
 
 		// Occlusion settings
 		inps.occlusionType = IPL_OCCLUSIONTYPE_RAYCAST;
-		inps.occlusionRadius = 1.0f;
-		inps.numOcclusionSamples = 16;
+		//inps.occlusionRadius = 1.0f;
+		inps.numOcclusionSamples = sims.maxNumOcclusionSamples;
 
 		// Transmission settings
 		inps.numTransmissionRays = 1;
@@ -543,6 +582,10 @@ void SteamAudioProcess::update()
 		bp.direction = dir;
 		iplBinauralEffectApply(bin[s], &bp, &outDirectBuffer, &outBinauralBuffer);
 
+		applyGainToBuffer(
+			&outBinauralBuffer,
+			frameSize,
+			directGain);
 
 		// REFLECTIONS
 		float rt60[3] = { so.reflections.reverbTimes[0], so.reflections.reverbTimes[1], so.reflections.reverbTimes[2] };
@@ -562,7 +605,7 @@ void SteamAudioProcess::update()
 				rpEarly.type = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
 			}
 			rpEarly.ir = so.reflections.ir;
-			rpEarly.numChannels = so.reflections.numChannels;
+			rpEarly.numChannels = ambiCh;
 			// no late tail
 			// use only early IR
 			rpEarly.irSize = irEarly;
@@ -570,6 +613,11 @@ void SteamAudioProcess::update()
 			iplReflectionEffectApply(reflEarly[s], &rpEarly, &inMono, &outEarlyReflectionBuffer, nullptr);
 			// Ambisonics decode -> stereo binaural
 			iplAmbisonicsDecodeEffectApply(decodeEarly[s], &dpar, &outEarlyReflectionBuffer, &outEarlyAmbisonicDecodeBuffer);
+		
+			applyGainToBuffer(
+				&outEarlyAmbisonicDecodeBuffer,
+				frameSize,
+				earlyReflectionsGain);
 		}
 
 		// (B) LATE-ONLY:
@@ -579,8 +627,6 @@ void SteamAudioProcess::update()
 			{
 				rpLate.type = IPL_REFLECTIONEFFECTTYPE_HYBRID;
 				rpLate.ir = so.reflections.ir;
-				rpLate.delay = so.reflections.delay;
-				rpLate.irSize = 0;
 				rpLate.eq[0] = eq3[0];
 				rpLate.eq[1] = eq3[1];
 				rpLate.eq[2] = eq3[2];
@@ -589,7 +635,9 @@ void SteamAudioProcess::update()
 			{
 				rpLate.type = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
 			}
-			rpLate.numChannels = so.reflections.numChannels;
+			//rpLate.delay = so.reflections.delay;
+			rpLate.delay = irEarly;
+			rpLate.numChannels = ambiCh;
 			rpLate.reverbTimes[0] = rt60[0];
 			rpLate.reverbTimes[1] = rt60[1];
 			rpLate.reverbTimes[2] = rt60[2];
@@ -598,6 +646,11 @@ void SteamAudioProcess::update()
 			// Ambisonics decode -> stereo binaural
 			iplAmbisonicsDecodeEffectApply(decodeLate[s], &dpar2, &outLateReflectionBuffer, &outLateAmbisonicDecodeBuffer);
 			iplAudioBufferDownmix(ctx, &outLateAmbisonicDecodeBuffer, &outMonoReverbBuffer);
+		
+			applyGainToBuffer(
+				&outMonoReverbBuffer,
+				frameSize,
+				reverbGain);
 		}
 
 		// Mix with compression into final buffers

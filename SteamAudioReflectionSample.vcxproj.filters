@@ -24,9 +24,15 @@
     <ClCompile Include="SteamAudioProcessDemo.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Placements.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SteamAudioProcess.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Placements.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
